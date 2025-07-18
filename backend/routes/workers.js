@@ -10,25 +10,56 @@ const router = express.Router();
 // @access  Public
 router.get('/', async (req, res) => {
   try {
-    const { service, city, sortBy, page = 1, limit = 10 } = req.query;
+    const { 
+      service, 
+      city, 
+      sortBy = 'rating', 
+      page = 1, 
+      limit = 10,
+      minRating,
+      maxRate,
+      search 
+    } = req.query;
     
     let query = { isActive: true };
     
     // Filter by service
-    if (service) {
+    if (service && service !== '') {
       query.services = { $in: [service] };
     }
     
-    // Filter by city
-    if (city) {
+    // Filter by city (case-insensitive)
+    if (city && city !== '') {
       query['address.city'] = new RegExp(city, 'i');
+    }
+    
+    // Filter by minimum rating
+    if (minRating && minRating !== '') {
+      query['rating.average'] = { $gte: parseFloat(minRating) };
+    }
+    
+    // Filter by maximum hourly rate
+    if (maxRate && maxRate !== '') {
+      query.hourlyRate = { $lte: parseFloat(maxRate) };
+    }
+    
+    // Search by name, description, or services
+    if (search && search !== '') {
+      const searchRegex = new RegExp(search, 'i');
+      query.$or = [
+        { name: searchRegex },
+        { description: searchRegex },
+        { services: { $in: [searchRegex] } },
+        { 'address.city': searchRegex },
+        { 'address.state': searchRegex }
+      ];
     }
     
     // Sorting options
     let sortOptions = {};
     switch (sortBy) {
       case 'rating':
-        sortOptions = { 'rating.average': -1 };
+        sortOptions = { 'rating.average': -1, 'rating.count': -1 };
         break;
       case 'experience':
         sortOptions = { experience: -1 };
@@ -39,27 +70,61 @@ router.get('/', async (req, res) => {
       case 'rate_high':
         sortOptions = { hourlyRate: -1 };
         break;
-      default:
+      case 'newest':
         sortOptions = { createdAt: -1 };
+        break;
+      default:
+        sortOptions = { 'rating.average': -1, createdAt: -1 };
     }
     
+    // Execute query with pagination
     const workers = await Worker.find(query)
       .select('-password -documents')
       .sort(sortOptions)
-      .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .limit(parseInt(limit))
+      .skip((parseInt(page) - 1) * parseInt(limit));
     
+    // Get total count for pagination
     const total = await Worker.countDocuments(query);
     
+    // Add some additional computed fields
+    const workersWithDetails = workers.map(worker => {
+      const workerObj = worker.toObject();
+      
+      // Calculate availability status
+      const now = new Date();
+      const dayOfWeek = now.toLocaleDateString('en', { weekday: 'lowercase' });
+      const currentTime = now.toTimeString().slice(0, 5); // HH:MM format
+      
+      const todayAvailability = workerObj.availability[dayOfWeek];
+      let isAvailableNow = false;
+      
+      if (todayAvailability && todayAvailability.available) {
+        if (todayAvailability.timeSlots.length === 0) {
+          isAvailableNow = true; // Available all day
+        } else {
+          isAvailableNow = todayAvailability.timeSlots.some(slot => {
+            return currentTime >= slot.start && currentTime <= slot.end;
+          });
+        }
+      }
+      
+      workerObj.isAvailableNow = isAvailableNow;
+      
+      return workerObj;
+    });
+    
     res.json({
-      workers,
-      totalPages: Math.ceil(total / limit),
-      currentPage: page,
-      total
+      workers: workersWithDetails,
+      totalPages: Math.ceil(total / parseInt(limit)),
+      currentPage: parseInt(page),
+      total,
+      hasNextPage: parseInt(page) < Math.ceil(total / parseInt(limit)),
+      hasPrevPage: parseInt(page) > 1
     });
   } catch (error) {
     console.error('Search workers error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: 'Server error while searching workers' });
   }
 });
 
@@ -75,9 +140,33 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Worker not found' });
     }
     
-    res.json(worker);
+    // Add availability status for today
+    const now = new Date();
+    const dayOfWeek = now.toLocaleDateString('en', { weekday: 'lowercase' });
+    const currentTime = now.toTimeString().slice(0, 5);
+    
+    const todayAvailability = worker.availability[dayOfWeek];
+    let isAvailableNow = false;
+    
+    if (todayAvailability && todayAvailability.available) {
+      if (todayAvailability.timeSlots.length === 0) {
+        isAvailableNow = true;
+      } else {
+        isAvailableNow = todayAvailability.timeSlots.some(slot => {
+          return currentTime >= slot.start && currentTime <= slot.end;
+        });
+      }
+    }
+    
+    const workerObj = worker.toObject();
+    workerObj.isAvailableNow = isAvailableNow;
+    
+    res.json(workerObj);
   } catch (error) {
     console.error('Get worker error:', error);
+    if (error.name === 'CastError') {
+      return res.status(400).json({ message: 'Invalid worker ID format' });
+    }
     res.status(500).json({ message: 'Server error' });
   }
 });

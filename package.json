@@ -1,0 +1,18 @@
+{
+  "name": "dailywageconnect",
+  "version": "1.0.0",
+  "description": "Local Job Scheduler for Daily-Wage Workers",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\"",
+    "backend": "cd backend && npm run dev",
+    "frontend": "cd frontend && npm start",
+    "install-all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+  },
+  "keywords": ["job-scheduler", "daily-wage", "workers", "booking"],
+  "author": "DailyWageConnect Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
